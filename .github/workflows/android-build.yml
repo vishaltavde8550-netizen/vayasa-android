@@ -26,15 +26,16 @@ jobs:
 
     steps:
 
-      # --------------------------------------------------
-      # 1. Checkout
-      # --------------------------------------------------
+      # ==================================================
+      # 1. Checkout repository
+      # ==================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
+
+      # ==================================================
       # 2. Find V56 ZIP
-      # --------------------------------------------------
+      # ==================================================
       - name: Find V56 ZIP
         id: zip
         shell: bash
@@ -58,9 +59,10 @@ jobs:
 
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
-      # --------------------------------------------------
-      # 3. Extract V56 project
-      # --------------------------------------------------
+
+      # ==================================================
+      # 3. Extract V56 Android project
+      # ==================================================
       - name: Extract V56 Android project
         shell: bash
         run: |
@@ -80,9 +82,10 @@ jobs:
             | sort \
             | head -100
 
-      # --------------------------------------------------
+
+      # ==================================================
       # 4. Copy Android project
-      # --------------------------------------------------
+      # ==================================================
       - name: Copy Android project to workspace
         shell: bash
         run: |
@@ -103,9 +106,10 @@ jobs:
           echo ""
           echo "Android project structure verified."
 
-      # --------------------------------------------------
-      # 5. Java 17
-      # --------------------------------------------------
+
+      # ==================================================
+      # 5. Set up Java 17
+      # ==================================================
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -113,15 +117,10 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      # --------------------------------------------------
-      # 6. Android SDK
-      #
-      # Do NOT install Android SDK again.
-      # GitHub Ubuntu 24.04 runner already contains:
-      # Android 36
-      # Build Tools 36.0.0
-      # Platform Tools
-      # --------------------------------------------------
+
+      # ==================================================
+      # 6. Verify Android SDK
+      # ==================================================
       - name: Verify Android SDK
         shell: bash
         run: |
@@ -141,24 +140,33 @@ jobs:
             exit 1
           fi
 
-          echo ""
-          echo "Android 36:"
-          ls -ld "$SDK/platforms/android-36"
+          if [ ! -d "$SDK/platforms/android-36" ]; then
+            echo "ERROR: Android 36 platform not found."
+            exit 1
+          fi
+
+          if [ ! -d "$SDK/build-tools/36.0.0" ]; then
+            echo "ERROR: Build Tools 36.0.0 not found."
+            exit 1
+          fi
+
+          if [ ! -d "$SDK/platform-tools" ]; then
+            echo "ERROR: Platform Tools not found."
+            exit 1
+          fi
 
           echo ""
-          echo "Build Tools 36.0.0:"
-          ls -ld "$SDK/build-tools/36.0.0"
-
-          echo ""
-          echo "Platform Tools:"
-          ls -ld "$SDK/platform-tools"
+          echo "Android 36: OK"
+          echo "Build Tools 36.0.0: OK"
+          echo "Platform Tools: OK"
 
           echo ""
           echo "Android SDK verification successful."
 
-      # --------------------------------------------------
-      # 7. Accept Android licenses
-      # --------------------------------------------------
+
+      # ==================================================
+      # 7. Accept Android SDK licenses
+      # ==================================================
       - name: Accept Android SDK licenses
         shell: bash
         run: |
@@ -174,33 +182,29 @@ jobs:
 
           if [ -z "$SDKMANAGER" ]; then
             echo "ERROR: sdkmanager executable was not found."
-            echo ""
-            echo "Available command-line tools:"
-            find "$SDK/cmdline-tools" \
-              -maxdepth 5 \
-              -type f \
-              | head -100
             exit 1
           fi
 
-          echo "Using:"
+          echo "Using sdkmanager:"
           echo "$SDKMANAGER"
 
           yes | "$SDKMANAGER" --licenses >/dev/null || true
 
           echo "Android licenses processed."
 
-      # --------------------------------------------------
-      # 8. Gradle 8.13
-      # --------------------------------------------------
+
+      # ==================================================
+      # 8. Set up Gradle 8.13
+      # ==================================================
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
 
-      # --------------------------------------------------
+
+      # ==================================================
       # 9. Select AdMob mode
-      # --------------------------------------------------
+      # ==================================================
       - name: Select AdMob mode
         id: admob
         shell: bash
@@ -213,13 +217,60 @@ jobs:
             MODE="test"
           fi
 
-          echo "AdMob mode: $MODE"
+          echo "Selected AdMob mode: $MODE"
 
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
-      # --------------------------------------------------
-      # 10. Verify Vayasa Android configuration
-      # --------------------------------------------------
+
+      # ==================================================
+      # 10. Apply required Android minimum SDK fix
+      #
+      # AdMob SDK 25.5.0 requires minSdk 24.
+      # V56 originally has minSdk 23.
+      # ==================================================
+      - name: Fix minimum Android SDK for AdMob
+        shell: bash
+        run: |
+          set -e
+
+          FILE="app/build.gradle.kts"
+
+          echo "Before fix:"
+          grep -n "minSdk" "$FILE"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("app/build.gradle.kts")
+          text = path.read_text()
+
+          old = "minSdk = 23"
+          new = "minSdk = 24"
+
+          if old not in text:
+              if "minSdk = 24" in text:
+                  print("minSdk is already 24.")
+              else:
+                  raise SystemExit(
+                      "ERROR: Expected minSdk = 23 was not found."
+                  )
+          else:
+              text = text.replace(old, new, 1)
+              path.write_text(text)
+              print("Changed minSdk from 23 to 24.")
+          PY
+
+          echo ""
+          echo "After fix:"
+          grep -n "minSdk" "$FILE"
+
+          echo ""
+          echo "Minimum Android SDK fix completed."
+
+
+      # ==================================================
+      # 11. Verify Android configuration
+      # ==================================================
       - name: Verify Android configuration
         shell: bash
         run: |
@@ -231,23 +282,34 @@ jobs:
 
           echo ""
           echo "Application ID:"
-          grep -n "applicationId" app/build.gradle.kts || true
+          grep -n "applicationId" app/build.gradle.kts
+
+          echo ""
+          echo "Minimum SDK:"
+          grep -n "minSdk" app/build.gradle.kts
 
           echo ""
           echo "Compile / Target SDK:"
-          grep -n "compileSdk\|targetSdk" app/build.gradle.kts || true
+          grep -n "compileSdk\|targetSdk" app/build.gradle.kts
 
           echo ""
           echo "Version:"
-          grep -n "versionCode\|versionName" app/build.gradle.kts || true
+          grep -n "versionCode\|versionName" app/build.gradle.kts
 
           echo ""
           echo "AdMob:"
-          grep -n "ADMOB" app/build.gradle.kts || true
+          grep -n "ADMOB" app/build.gradle.kts
 
-      # --------------------------------------------------
-      # 11. Build AAB
-      # --------------------------------------------------
+          echo ""
+          echo "Expected:"
+          echo "minSdk = 24"
+          echo "compileSdk = 36"
+          echo "targetSdk = 36"
+
+
+      # ==================================================
+      # 12. Build release AAB
+      # ==================================================
       - name: Build release AAB
         shell: bash
         run: |
@@ -263,9 +325,10 @@ jobs:
             bundleRelease \
             -PadMode="${{ steps.admob.outputs.mode }}"
 
-      # --------------------------------------------------
-      # 12. Verify AAB
-      # --------------------------------------------------
+
+      # ==================================================
+      # 13. Verify AAB
+      # ==================================================
       - name: Verify AAB
         shell: bash
         run: |
@@ -274,7 +337,7 @@ jobs:
           AAB="app/build/outputs/bundle/release/app-release.aab"
 
           if [ ! -f "$AAB" ]; then
-            echo "ERROR: AAB was not created."
+            echo "ERROR: Release AAB was not created."
 
             echo ""
             echo "Available build files:"
@@ -292,9 +355,10 @@ jobs:
 
           ls -lh "$AAB"
 
-      # --------------------------------------------------
-      # 13. Upload AAB
-      # --------------------------------------------------
+
+      # ==================================================
+      # 14. Upload AAB
+      # ==================================================
       - name: Upload Android AAB
         uses: actions/upload-artifact@v4
         with:
