@@ -1,0 +1,165 @@
+name: Vayasa Android AAB Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ad_mode:
+        description: "Choose AdMob mode"
+        required: true
+        default: "test"
+        type: choice
+        options:
+          - test
+          - production
+
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    name: Build Vayasa Android AAB
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find V56 ZIP
+        id: zip
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE="$(find . -maxdepth 1 -type f -iname 'Vayasa-Android-PlayStore-AdMob-v56*.zip' | head -n 1)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Vayasa V56 ZIP was not found."
+            echo "Files in repository:"
+            ls -la
+            exit 1
+          fi
+
+          echo "Found: $ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract V56 Android project
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p /tmp/vayasa-v56
+          unzip -q "${{ steps.zip.outputs.zip_file }}" -d /tmp/vayasa-v56
+
+          echo "Extracted V56 project:"
+          find /tmp/vayasa-v56 -maxdepth 3 -type f | sort | head -100
+
+      - name: Copy Android project to workspace
+        shell: bash
+        run: |
+          set -e
+
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='.github/workflows/android-build.yml' \
+            /tmp/vayasa-v56/ ./
+
+          echo "Final Android project:"
+          ls -la
+
+          test -f settings.gradle.kts
+          test -f build.gradle.kts
+          test -f app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
+
+          echo "Android project structure verified."
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 16 SDK
+        shell: bash
+        run: |
+          sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Select AdMob mode
+        id: admob
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MODE="${{ inputs.ad_mode }}"
+          else
+            MODE="test"
+          fi
+
+          echo "AdMob mode: $MODE"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Android configuration
+        shell: bash
+        run: |
+          set -e
+
+          echo "Checking package name..."
+          grep -n "applicationId" app/build.gradle.kts
+
+          echo "Checking target SDK..."
+          grep -n "targetSdk" app/build.gradle.kts
+
+          echo "Checking version..."
+          grep -n "versionCode\|versionName" app/build.gradle.kts
+
+          echo "Checking AdMob configuration..."
+          grep -n "ADMOB" app/build.gradle.kts
+
+      - name: Build release AAB
+        shell: bash
+        run: |
+          set -e
+
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            bundleRelease \
+            -PadMode="${{ steps.admob.outputs.mode }}"
+
+      - name: Verify AAB
+        shell: bash
+        run: |
+          set -e
+
+          AAB="app/build/outputs/bundle/release/app-release.aab"
+
+          if [ ! -f "$AAB" ]; then
+            echo "ERROR: AAB was not created."
+            find app/build -type f | sort | head -200
+            exit 1
+          fi
+
+          echo "AAB successfully created:"
+          ls -lh "$AAB"
+
+      - name: Upload Android AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vayasa-Android-AAB-${{ steps.admob.outputs.mode }}-V56
+          path: app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 14
