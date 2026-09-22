@@ -34,16 +34,18 @@ jobs:
         run: |
           set -e
 
-          ZIP_FILE="$(find . -maxdepth 1 -type f -iname 'Vayasa-Android-PlayStore-AdMob-v56*.zip' | head -n 1)"
+          ZIP_FILE="$(find . -maxdepth 1 -type f \
+            -iname 'Vayasa-Android-PlayStore-AdMob-v56*.zip' \
+            | head -n 1)"
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: Vayasa V56 ZIP was not found."
-            echo "Files in repository:"
+            echo "Repository files:"
             ls -la
             exit 1
           fi
 
-          echo "Found: $ZIP_FILE"
+          echo "Found V56 ZIP: $ZIP_FILE"
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Extract V56 Android project
@@ -51,10 +53,13 @@ jobs:
         run: |
           set -e
 
+          rm -rf /tmp/vayasa-v56
           mkdir -p /tmp/vayasa-v56
-          unzip -q "${{ steps.zip.outputs.zip_file }}" -d /tmp/vayasa-v56
 
-          echo "Extracted V56 project:"
+          unzip -q "${{ steps.zip.outputs.zip_file }}" \
+            -d /tmp/vayasa-v56
+
+          echo "Extracted project:"
           find /tmp/vayasa-v56 -maxdepth 3 -type f | sort | head -100
 
       - name: Copy Android project to workspace
@@ -84,15 +89,22 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android 16 SDK
+      - name: Prepare Android SDK
         shell: bash
         run: |
+          set -e
+
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+
+          yes | sdkmanager --licenses >/dev/null || true
+
           sdkmanager \
+            "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"
+
+          echo "Android SDK ready."
 
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
@@ -103,6 +115,8 @@ jobs:
         id: admob
         shell: bash
         run: |
+          set -e
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             MODE="${{ inputs.ad_mode }}"
           else
@@ -117,17 +131,17 @@ jobs:
         run: |
           set -e
 
-          echo "Checking package name..."
-          grep -n "applicationId" app/build.gradle.kts
+          echo "===== Package ====="
+          grep -n "applicationId" app/build.gradle.kts || true
 
-          echo "Checking target SDK..."
-          grep -n "targetSdk" app/build.gradle.kts
+          echo "===== SDK ====="
+          grep -n "compileSdk\|targetSdk" app/build.gradle.kts || true
 
-          echo "Checking version..."
-          grep -n "versionCode\|versionName" app/build.gradle.kts
+          echo "===== Version ====="
+          grep -n "versionCode\|versionName" app/build.gradle.kts || true
 
-          echo "Checking AdMob configuration..."
-          grep -n "ADMOB" app/build.gradle.kts
+          echo "===== AdMob ====="
+          grep -n "ADMOB" app/build.gradle.kts || true
 
       - name: Build release AAB
         shell: bash
@@ -149,11 +163,15 @@ jobs:
 
           if [ ! -f "$AAB" ]; then
             echo "ERROR: AAB was not created."
+            echo "Available build files:"
             find app/build -type f | sort | head -200
             exit 1
           fi
 
-          echo "AAB successfully created:"
+          echo "======================================"
+          echo "VAYASA AAB CREATED SUCCESSFULLY"
+          echo "======================================"
+
           ls -lh "$AAB"
 
       - name: Upload Android AAB
