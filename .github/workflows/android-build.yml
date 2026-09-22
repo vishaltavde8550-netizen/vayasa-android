@@ -45,7 +45,9 @@ jobs:
             exit 1
           fi
 
-          echo "Found V56 ZIP: $ZIP_FILE"
+          echo "Found V56 ZIP:"
+          echo "$ZIP_FILE"
+
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Extract V56 Android project
@@ -59,8 +61,13 @@ jobs:
           unzip -q "${{ steps.zip.outputs.zip_file }}" \
             -d /tmp/vayasa-v56
 
-          echo "Extracted project:"
-          find /tmp/vayasa-v56 -maxdepth 3 -type f | sort | head -100
+          echo "V56 project extracted."
+
+          find /tmp/vayasa-v56 \
+            -maxdepth 3 \
+            -type f \
+            | sort \
+            | head -100
 
       - name: Copy Android project to workspace
         shell: bash
@@ -72,15 +79,14 @@ jobs:
             --exclude='.github/workflows/android-build.yml' \
             /tmp/vayasa-v56/ ./
 
-          echo "Final Android project:"
-          ls -la
+          echo "Android project copied."
 
           test -f settings.gradle.kts
           test -f build.gradle.kts
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
 
-          echo "Android project structure verified."
+          echo "Android project structure verified successfully."
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -94,17 +100,99 @@ jobs:
         run: |
           set -e
 
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
 
-          yes | sdkmanager --licenses >/dev/null || true
+          echo "======================================"
+          echo "ANDROID SDK"
+          echo "======================================"
+          echo "SDK path: $SDK"
 
-          sdkmanager \
+          if [ ! -d "$SDK" ]; then
+            echo "ERROR: Android SDK directory was not found."
+            exit 1
+          fi
+
+          SDKMANAGER=""
+
+          for candidate in \
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK/cmdline-tools/bin/sdkmanager" \
+            "$SDK/tools/bin/sdkmanager"
+          do
+            if [ -x "$candidate" ]; then
+              SDKMANAGER="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager was not found in standard locations."
+            echo "Searching entire Android SDK..."
+
+            FOUND="$(find "$SDK" \
+              -type f \
+              -name sdkmanager \
+              -print \
+              2>/dev/null \
+              | head -n 1)"
+
+            if [ -n "$FOUND" ]; then
+              SDKMANAGER="$FOUND"
+            fi
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager could not be found."
+            echo "Android SDK contents:"
+            find "$SDK" \
+              -maxdepth 4 \
+              -type f \
+              | head -200
+
+            exit 1
+          fi
+
+          echo "Using sdkmanager:"
+          echo "$SDKMANAGER"
+
+          SDK_BIN="$(dirname "$SDKMANAGER")"
+          export PATH="$SDK_BIN:$PATH"
+
+          echo "PATH updated:"
+          echo "$SDK_BIN"
+
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+
+          "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"
 
-          echo "Android SDK ready."
+          echo "======================================"
+          echo "ANDROID SDK READY"
+          echo "======================================"
+
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          set -e
+
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+
+          echo "SDK: $SDK"
+
+          if [ ! -d "$SDK/platforms/android-36" ]; then
+            echo "ERROR: Android 36 platform was not installed."
+            exit 1
+          fi
+
+          if [ ! -d "$SDK/build-tools/36.0.0" ]; then
+            echo "ERROR: Build Tools 36.0.0 were not installed."
+            exit 1
+          fi
+
+          echo "Android 36 platform: OK"
+          echo "Build Tools 36.0.0: OK"
 
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
@@ -123,7 +211,8 @@ jobs:
             MODE="test"
           fi
 
-          echo "AdMob mode: $MODE"
+          echo "Selected AdMob mode: $MODE"
+
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       - name: Verify Android configuration
@@ -131,22 +220,33 @@ jobs:
         run: |
           set -e
 
-          echo "===== Package ====="
+          echo "======================================"
+          echo "ANDROID CONFIGURATION"
+          echo "======================================"
+
+          echo "Application ID:"
           grep -n "applicationId" app/build.gradle.kts || true
 
-          echo "===== SDK ====="
+          echo ""
+          echo "SDK configuration:"
           grep -n "compileSdk\|targetSdk" app/build.gradle.kts || true
 
-          echo "===== Version ====="
+          echo ""
+          echo "Version:"
           grep -n "versionCode\|versionName" app/build.gradle.kts || true
 
-          echo "===== AdMob ====="
+          echo ""
+          echo "AdMob configuration:"
           grep -n "ADMOB" app/build.gradle.kts || true
 
       - name: Build release AAB
         shell: bash
         run: |
           set -e
+
+          echo "======================================"
+          echo "BUILDING VAYASA AAB"
+          echo "======================================"
 
           gradle \
             --no-daemon \
@@ -162,9 +262,15 @@ jobs:
           AAB="app/build/outputs/bundle/release/app-release.aab"
 
           if [ ! -f "$AAB" ]; then
-            echo "ERROR: AAB was not created."
+            echo "ERROR: Release AAB was not created."
+
+            echo ""
             echo "Available build files:"
-            find app/build -type f | sort | head -200
+            find app/build \
+              -type f \
+              | sort \
+              | head -200
+
             exit 1
           fi
 
